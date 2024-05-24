@@ -1,17 +1,135 @@
-import { Button } from "antd";
-import { useEffect, useReducer } from "react";
+import React, {
+  useContext,
+  useEffect,
+  useRef,
+  useReducer,
+  useState,
+} from "react";
+import { Button, Form, Input, Popconfirm, Table } from "antd";
+import "./App.css";
 
-const action = (state, { type, payload }) => {
-  switch (type) {
+const EditableContext = React.createContext(null);
+
+const EditableRow = ({ index, ...props }) => {
+  const [form] = Form.useForm();
+  return (
+    <Form form={form} component={false}>
+      <EditableContext.Provider value={form}>
+        <tr {...props} />
+      </EditableContext.Provider>
+    </Form>
+  );
+};
+
+const EditableCell = ({
+  title,
+  editable,
+  children,
+  dataIndex,
+  record,
+  handleSave,
+  ...restProps
+}) => {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef(null);
+  const form = useContext(EditableContext);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+    }
+  }, [editing]);
+
+  const toggleEdit = () => {
+    setEditing(!editing);
+    form.setFieldsValue({
+      [dataIndex]: record[dataIndex],
+    });
+  };
+
+  const save = async () => {
+    try {
+      const values = await form.validateFields();
+      toggleEdit();
+      handleSave({
+        ...record,
+        ...values,
+      });
+    } catch (errInfo) {
+      console.log("Save failed:", errInfo);
+    }
+  };
+
+  let childNode = children;
+
+  if (editable) {
+    childNode = editing ? (
+      <Form.Item
+        style={{ margin: 0 }}
+        name={dataIndex}
+        rules={[{ required: true, message: `${title} is required.` }]}
+      >
+        <Input ref={inputRef} onPressEnter={save} onBlur={save} />
+      </Form.Item>
+    ) : (
+      <div
+        className="editable-cell-value-wrap"
+        style={{ paddingRight: 24 }}
+        onClick={toggleEdit}
+      >
+        {children}
+      </div>
+    );
+  }
+
+  return <td {...restProps}>{childNode}</td>;
+};
+
+const initialState = {
+  dataSource: [],
+  count: 0,
+};
+
+const reducer = (state, action) => {
+  switch (action.type) {
+    case "ADD_ROW":
+      const newData = {
+        key: state.count,
+        name: [],
+        address: [],
+        completed: false,
+      };
+      return {
+        ...state,
+        dataSource: [...state.dataSource, newData],
+        count: state.count + 1,
+      };
+    case "DELETE_ROW":
+      return {
+        ...state,
+        dataSource: state.dataSource.filter(
+          (item) => item.key !== action.payload
+        ),
+      };
+    case "SAVE_ROW":
+      const newDataSource = [...state.dataSource];
+      const index = newDataSource.findIndex(
+        (item) => item.key === action.payload.key
+      );
+      const item = newDataSource[index];
+      newDataSource.splice(index, 1, { ...item, ...action.payload });
+      return {
+        ...state,
+        dataSource: newDataSource,
+      };
     case "DATA_CHANGE":
       return {
         ...state,
-        data: payload.data,
-      };
-    case "DELETE":
-      return {
-        ...state,
-        data: state.data.filter(({ id }) => id !== payload.id),
+        dataSource: action.payload.data.map((item, idx) => ({
+          key: idx,
+          ...item,
+        })),
+        count: action.payload.data.length,
       };
     default:
       return state;
@@ -19,9 +137,7 @@ const action = (state, { type, payload }) => {
 };
 
 const App = () => {
-  const [state, dispatch] = useReducer(action, {
-    data: [],
-  });
+  const [state, dispatch] = useReducer(reducer, initialState);
 
   useEffect(() => {
     const getData = async () => {
@@ -38,31 +154,88 @@ const App = () => {
     getData();
   }, []);
 
-  const onClick = async (id) => {
-    dispatch({ type: "DELETE", payload: { id } });
-
-    try {
-      await fetch(`https://jsonplaceholder.typicode.com/todos/${id}`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-    } catch (error) {
-      console.error("Error deleting item:", error);
-    }
+  const handleDelete = (key) => {
+    dispatch({ type: "DELETE_ROW", payload: key });
   };
 
+  const handleAdd = () => {
+    dispatch({ type: "ADD_ROW" });
+  };
+
+  const handleSave = (row) => {
+    dispatch({ type: "SAVE_ROW", payload: row });
+  };
+
+  const defaultColumns = [
+    {
+      title: "ID",
+      dataIndex: "id",
+      width: "20%",
+      editable: true,
+    },
+    {
+      title: "Title",
+      dataIndex: "title",
+      width: "50%",
+      editable: true,
+    },
+    {
+      title: "Completed",
+      dataIndex: "completed",
+      width: "20%",
+      render: (completed) => (completed ? "Yes" : "No"),
+    },
+    {
+      title: "Operation",
+      dataIndex: "operation",
+      render: (_, record) =>
+        state.dataSource.length >= 1 ? (
+          <Popconfirm
+            title="Sure to delete?"
+            onConfirm={() => handleDelete(record.key)}
+          >
+            <a>Delete</a>
+          </Popconfirm>
+        ) : null,
+    },
+  ];
+
+  const components = {
+    body: {
+      row: EditableRow,
+      cell: EditableCell,
+    },
+  };
+
+  const columns = defaultColumns.map((col) => {
+    if (!col.editable) {
+      return col;
+    }
+    return {
+      ...col,
+      onCell: (record) => ({
+        record,
+        editable: col.editable,
+        dataIndex: col.dataIndex,
+        title: col.title,
+        handleSave,
+      }),
+    };
+  });
+
   return (
-    <>
-      <div className="flex items-center justify-center flex-col w-full h-[100vh] gap-[15px]">
-        {state.data.map(({ id, title }) => (
-          <div key={id}>
-            {title} <Button onClick={() => onClick(id)}>DELETE</Button>
-          </div>
-        ))}
-      </div>
-    </>
+    <div>
+      <Button onClick={handleAdd} type="primary" style={{ marginBottom: 16 }}>
+        Add a row
+      </Button>
+      <Table
+        components={components}
+        rowClassName={() => "editable-row"}
+        bordered
+        dataSource={state.dataSource}
+        columns={columns}
+      />
+    </div>
   );
 };
 
